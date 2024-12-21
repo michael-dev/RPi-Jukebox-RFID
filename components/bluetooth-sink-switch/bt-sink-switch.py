@@ -2,12 +2,12 @@
 """
 Provides bt_switch (see below) as function and callable script
 
-If called as script, the configuration of led_pin reflecting audio sink status is read from ../../settings/gpio_settings.ini'
+If called as script, the configuration of led_pin / led_pin2 reflecting audio sink status is read from ../../settings/gpio_settings.ini'
 See function get_led_pin_configuration for details. If no configuration file is found led_pin is None
 
 Usage:
 $ bt-sink-switch cmd [debug]
-    cmd = toggle|speakers|headphones : select audio target
+    cmd = toggle|speakers|headphones|toggle2|headphones2 : select audio target
     debug                            : enable debug logging
 """
 
@@ -33,7 +33,7 @@ logger.addHandler(logconsole)
 def bt_usage(sname):
     """Print usage, if module is called as script"""
     print("Usage")
-    print("  ./" + sname + " toggle | speakers | headphones [debug]")
+    print("  ./" + sname + " toggle | speakers | headphones | toggle2 | headphones2 [debug]")
 
 
 def bt_check_mpc_err() -> None:
@@ -47,8 +47,50 @@ def bt_check_mpc_err() -> None:
         mpcplay = subprocess.run("mpc play", shell=True, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         logger.debug(mpcplay)
 
+def bt_led(led_pin, isEnabled):
+    if led_pin is None:
+        return
+    proc = subprocess.run(["gpioset", led_pin[0], led_pin[1]+"=" +( "1" if isEnabled else "0")], shell=False,
+                          check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    msg = "LED "+("on" if isEnabled else "off")+": "
+    logger.debug(msg.encode("utf-8") + proc.stdout)
 
-def bt_switch(cmd, led_pin=None): # noqa C901
+def bt_leds(led_pins, led_states):
+    for i in range(len(led_pins)):
+        bt_led(led_pins[i], led_states[i])
+
+def bt_switch_to(output_id, led_pins, led_states):
+    print(f"Switched audio sink to \"Output {output_id}\"")
+    # With mpc enable only 2, output 1 gets disabled before output 2 gets enabled causing a stream output fail
+    # This order avoids the issue
+    # old: disable of output 1, but we need to disable all
+    print(f"mpc enable {output_id}; sleep 0.1; mpc enable {output_id} only")
+    proc = subprocess.run(["mpc","enable", str(output_id)], shell=False, check=False,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    logger.debug(proc.stdout)
+    
+    time.sleep(0.1)
+    
+    proc = subprocess.run(["mpc","enable", "only", str(output_id)], shell=False, check=False,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    logger.debug(proc.stdout)
+    # Yet, in some cases, a stream error still occurs: check and recover
+    bt_check_mpc_err()
+    bt_leds(led_pins, led_states)
+
+def bt_find_led_pin(led_pin):
+    # detect GPIO
+    proc = subprocess.run(["gpiofind", led_pin], 
+                            shell=False, check=False,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    logger.debug(proc.stdout)
+    if proc.returncode != 0:
+        logger.error("GPIO for LED not found")
+        return None
+    else:
+        return proc.stdout.decode("utf-8").strip().split(" ")
+
+def bt_switch(cmd, led_pins): # noqa C901
     """
     Set/Toggle between regular speakers and headphone output. If no bluetooth device is connected,
     always defaults to mpc output 1
@@ -100,85 +142,57 @@ def bt_switch(cmd, led_pin=None): # noqa C901
 
     Parameters
     ----------
-    :param cmd: string is "toggle" | "speakers" | "headphones"
-    :param led_pin: integer with GPIO pin number of LED to reflect output status. If None, LED support is disabled
+    :param cmd: string is "toggle" | "speakers" | "headphones" | "toggle2" | "headphones2"
+    :param led_pin / led_pin2: GPIO pin number of LED to reflect output status. If None, LED support is disabled
     (and no GPIO pin is blocked)
     """
     # Check for valid command
-    if cmd != "toggle" and cmd != "speakers" and cmd != "headphones":
+    if cmd != "toggle" and cmd != "speakers" and cmd != "headphones" and cmd != "toggle2" and cmd != "headphones2":
         logger.error("Invalid command. Doing nothing.")
         return
 
     # Rudimentary check if LED pin request is valid GPIO pin number
-    if led_pin is not None:
-        # detect GPIO
-        proc = subprocess.run(["gpiofind", led_pin], 
-                            shell=False, check=False,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        logger.debug(proc.stdout)
-        if proc.returncode != 0:
-            logger.error("GPIO for LED not found")
-            led_pin = None
-        else:
-            led_pin = proc.stdout.decode("utf-8").strip().split(" ")
+    led_pins = [ bt_find_led_pin(led_pin) for led_pin in led_pins ]
 
     # Figure out if output 1 (speakers) is enabled
-    isSpeakerOn_console = subprocess.run("mpc outputs", shell=True, check=False, stdout=subprocess.PIPE,
+    isOutputsOn_console = subprocess.run("mpc outputs", shell=True, check=False, stdout=subprocess.PIPE,
                                          stderr=subprocess.STDOUT)
-    logger.debug(isSpeakerOn_console.stdout)
-    isSpeakerOn = re.search(b"^Output 1.*enabled", isSpeakerOn_console.stdout)
+    logger.debug(isOutputsOn_console.stdout)
+    isOutput2On = re.search(b"Output 2.*enabled", isOutputsOn_console.stdout)
+    isOutput3On = re.search(b"Output 3.*enabled", isOutputsOn_console.stdout)
 
-    # Figure out if a bluetooth device is connected (any device will do). Assume here that only speakers/headsets
-    # will be connected
-    # -> No need for user to adapt MAC address
-    # -> will actually support multiple speakers/headsets paired to the phoniebox
-    # Alternative: Check for specific bluetooth device only with "bluetoothctl info MACADDRESS"
-    isBtConnected_console = subprocess.run("bluetoothctl info", shell=True, check=False, stdout=subprocess.PIPE,
+    if (cmd == "toggle" and not isOutput2On) or (cmd == "headphones"):
+        # command to turn on bluetooth output
+
+        # Figure out if a bluetooth device is connected (any device will do). Assume here that only speakers/headsets
+        # will be connected
+        # -> No need for user to adapt MAC address
+        # -> will actually support multiple speakers/headsets paired to the phoniebox
+        # Alternative: Check for specific bluetooth device only with "bluetoothctl info MACADDRESS"
+        isBtConnected_console = subprocess.run("bluetoothctl info", shell=True, check=False, stdout=subprocess.PIPE,
                                            stderr=subprocess.STDOUT)
-    logger.debug(isBtConnected_console.stdout)
-    isBtConnected = re.search(b"Connected:\s+yes", isBtConnected_console.stdout) # noqa W605
+        logger.debug(isBtConnected_console.stdout)
+        isBtConnected = re.search(b"Connected:\s+yes", isBtConnected_console.stdout) # noqa W605
 
-    if (cmd == "toggle" and isSpeakerOn) or (cmd == "headphones"):
         # Only switch to BT headphones if they are actually connected
         if isBtConnected:
-            print("Switched audio sink to \"Output 2\"")
-            # With mpc enable only 2, output 1 gets disabled before output 2 gets enabled causing a stream output fail
-            # This order avoids the issue
-            proc = subprocess.run("mpc enable 2; sleep 0.1; mpc disable 1", shell=True, check=False,
-                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            logger.debug(proc.stdout)
-            # Yet, in some cases, a stream error still occurs: check and recover
-            bt_check_mpc_err()
-            if led_pin is not None:
-                proc = subprocess.run(["gpioset", led_pin[0], led_pin[1]+"=1"], shell=False,
-                                      check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                logger.debug(b'LED on: ' + proc.stdout)
+            bt_switch_to(2, led_pins, [True, False])
             return
         else:
             print("No bluetooth device connected. Defaulting to \"Output 1\".")
-            if led_pin:
-                sleeptime = 0.25
-                for i in range(0, 3):
-                    proc = subprocess.run(["gpioset", led_pin[0], led_pin[1]+"=1"], shell=False,
-                                          check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                    time.sleep(sleeptime)
-                    proc = subprocess.run(["gpioset", led_pin[0], led_pin[1]+"=0"], shell=False,
-                                          check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                    time.sleep(sleeptime)
+            sleeptime = 0.25
+            for i in range(0, 3):
+                bt_leds(led_pins, [True, False])
+                time.sleep(sleeptime)
+                bt_leds(led_pins, [False, False])
+                time.sleep(sleeptime)
+    elif (cmd == "toggle2" and not isOutput3On) or (cmd == "headphones2"):
+        # command to turn on bluetooth output 3
+        bt_switch_to(3, led_pins, [False, True])
+        return
 
     # Default: Switch to Speakers
-    print("Switched audio sink to \"Output 1\"")
-    # mpc only 1 always enables 1 first, avoiding any intermediate state with no valid output stream
-    proc = subprocess.run("mpc enable only 1", shell=True, check=False, stdout=subprocess.PIPE,
-                          stderr=subprocess.STDOUT)
-    logger.debug(proc.stdout)
-    # Yet, in some cases, a stream error still occurs: check and recover
-    bt_check_mpc_err()
-    if led_pin is not None:
-        proc = subprocess.run(["gpioset", led_pin[0], led_pin[1]+"=0"], shell=False,
-                              check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        logger.debug(b'LED off: ' + proc.stdout)
-
+    bt_switch_to(1, led_pins, [False, False])
 
 def get_led_pin_config(cfg_file):
     """Read the led pin for reflecting current sink status from cfg_file which is a Python configparser file
@@ -189,10 +203,11 @@ def get_led_pin_config(cfg_file):
 
     [BluetoothToggleLed]
     led_pin: GPIO27
+    led_pin2: GPIO17
 
     where
-    - led_pin is the BCM number of the GPIO pin (i.e. 'led_pin = 6' means GPIO6) and defaults to None
-    - enabled can be used to temporarily disable the LED
+    - led_pin is the BCM number of the GPIO pin (i.e. 'led_pin = GPIO6' means GPIO6) and defaults to None
+    - led_pin2 is the BCM number of the GPIO pin (i.e. 'led_pin = GPIO6' means GPIO6) and defaults to None used for Output 3
 
     Note: Capitalization of [BluetoothToggleLed] is important!"""
 
@@ -207,17 +222,21 @@ def get_led_pin_config(cfg_file):
 
     section_name = 'BluetoothToggleLed'
     led_pin = None
+    led_pin2 = None
     if section_name in cfg:
-        if cfg[section_name].getboolean('enabled', fallback=False):
-            led_pin = cfg[section_name].get('led_pin', fallback=None)
-            if not led_pin:
-                logger.warning("Could not find 'led_pin' or could not read integer value")
-                led_pin = None
+        led_pin = cfg[section_name].get('led_pin', fallback=None)
+        led_pin2 = cfg[section_name].get('led_pin2', fallback=None)
+        if not led_pin:
+            logger.warning("Could not find 'led_pin'")
+            led_pin = None
+        if not led_pin2:
+            logger.warning("Could not find 'led_pin2'")
+            led_pin2 = None
     else:
         logger.debug(f"No section {section_name} found. Defaulting to led_pin = None")
 
-    logger.debug(f"Using LED pin = {led_pin}")
-    return led_pin
+    logger.debug(f"Using LED pin = {led_pin}, {led_pin2}")
+    return [led_pin, led_pin2]
 
 
 if __name__ == "__main__":
