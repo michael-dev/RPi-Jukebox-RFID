@@ -17,6 +17,7 @@ import subprocess
 import logging
 import os
 import configparser
+import time
 
 
 # Create logger
@@ -110,24 +111,16 @@ def bt_switch(cmd, led_pin=None): # noqa C901
 
     # Rudimentary check if LED pin request is valid GPIO pin number
     if led_pin is not None:
-        if led_pin < 2 or led_pin > 27:
+        # detect GPIO
+        proc = subprocess.run(["gpiofind", led_pin], 
+                            shell=False, check=False,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        logger.debug(proc.stdout)
+        if proc.returncode != 0:
+            logger.error("GPIO for LED not found")
             led_pin = None
-            logger.error("Invalid led_pin. Ignoring led_pin = " + str(led_pin))
-
-    if led_pin is not None:
-        # Set-up GPIO LED pin if not already configured. If it already exists, sanity check direction of pin before use
-        try:
-            with open("/sys/class/gpio/gpio" + str(led_pin) + "/direction") as f:
-                if f.readline(3) != "out":
-                    logger.error("LED pin already in use with direction 'in'. Ignoring led_pin = " + str(led_pin))
-                    led_pin = None
-        except FileNotFoundError:
-            # GPIO direction file does not exist -> pin is not configured. Set it up (sleep is necessary!)
-            proc = subprocess.run("echo " + str(led_pin) + " > /sys/class/gpio/export; \
-                           sleep 0.1; \
-                           echo out > /sys/class/gpio/gpio" + str(led_pin) + "/direction", shell=True, check=False,
-                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            logger.debug(proc.stdout)
+        else:
+            led_pin = proc.stdout.decode("utf-8").strip().split(" ")
 
     # Figure out if output 1 (speakers) is enabled
     isSpeakerOn_console = subprocess.run("mpc outputs", shell=True, check=False, stdout=subprocess.PIPE,
@@ -157,7 +150,7 @@ def bt_switch(cmd, led_pin=None): # noqa C901
             # Yet, in some cases, a stream error still occurs: check and recover
             bt_check_mpc_err()
             if led_pin is not None:
-                proc = subprocess.run("echo 1 > /sys/class/gpio/gpio" + str(led_pin) + "/value", shell=True,
+                proc = subprocess.run(["gpioset", led_pin[0], led_pin[1]+"=1"], shell=False,
                                       check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                 logger.debug(b'LED on: ' + proc.stdout)
             return
@@ -166,9 +159,12 @@ def bt_switch(cmd, led_pin=None): # noqa C901
             if led_pin:
                 sleeptime = 0.25
                 for i in range(0, 3):
-                    subprocess.run("echo 1 > /sys/class/gpio/gpio" + str(led_pin) + "/value; sleep " + str(
-                        sleeptime) + "; echo 0 > /sys/class/gpio/gpio" + str(led_pin) + "/value; sleep " + str(
-                        sleeptime), shell=True, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                    proc = subprocess.run(["gpioset", led_pin[0], led_pin[1]+"=1"], shell=False,
+                                          check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                    time.sleep(sleeptime)
+                    proc = subprocess.run(["gpioset", led_pin[0], led_pin[1]+"=0"], shell=False,
+                                          check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                    time.sleep(sleeptime)
 
     # Default: Switch to Speakers
     print("Switched audio sink to \"Output 1\"")
@@ -178,9 +174,9 @@ def bt_switch(cmd, led_pin=None): # noqa C901
     logger.debug(proc.stdout)
     # Yet, in some cases, a stream error still occurs: check and recover
     bt_check_mpc_err()
-    if led_pin:
-        proc = subprocess.run("echo 0 > /sys/class/gpio/gpio" + str(led_pin) + "/value", shell=True, check=False,
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if led_pin is not None:
+        proc = subprocess.run(["gpioset", led_pin[0], led_pin[1]+"=0"], shell=False,
+                              check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         logger.debug(b'LED off: ' + proc.stdout)
 
 
@@ -192,8 +188,7 @@ def get_led_pin_config(cfg_file):
     The file must contain the entry
 
     [BluetoothToggleLed]
-    enabled = True
-    led_pin = 6
+    led_pin: GPIO27
 
     where
     - led_pin is the BCM number of the GPIO pin (i.e. 'led_pin = 6' means GPIO6) and defaults to None
@@ -214,11 +209,9 @@ def get_led_pin_config(cfg_file):
     led_pin = None
     if section_name in cfg:
         if cfg[section_name].getboolean('enabled', fallback=False):
-            led_pin = cfg[section_name].getint('led_pin', fallback=None)
+            led_pin = cfg[section_name].get('led_pin', fallback=None)
             if not led_pin:
                 logger.warning("Could not find 'led_pin' or could not read integer value")
-            elif not 1 <= led_pin <= 27:
-                logger.warning(f"Ignoring out of range pin number: {led_pin}.")
                 led_pin = None
     else:
         logger.debug(f"No section {section_name} found. Defaulting to led_pin = None")

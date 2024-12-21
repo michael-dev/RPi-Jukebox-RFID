@@ -111,14 +111,13 @@ $ ./install-bt-sink-switch.sh
 
 #### Status LED
 
-An optional status LED will be turned on if the audio sink is set to bluetooth. If a toggle command is issued, but no bluetooth device is connected, the LED will blink three times. Looks very neat, if you have a button with integrated LED. Add these lines to your `RPi-Jukebox-RFID/settings/gpio_settings.ini`, to use GPIO 13 as LED signal. It is `led_pin` the BCM number of the GPIO pin (i.e. 'led_pin = 13' means GPIO13) and defaults to None. Create the file, if it does not exist.
+An optional status LED will be turned on if the audio sink is set to bluetooth. If a toggle command is issued, but no bluetooth device is connected, the LED will blink three times. Looks very neat, if you have a button with integrated LED. Add these lines to your `RPi-Jukebox-RFID/settings/gpio_settings.ini`, to use GPIO 13 as LED signal. It is `led_pin` the gpiofind name of the GPIO pin (i.e. 'led_pin = GPIO13' means GPIO13) and defaults to None. Create the file, if it does not exist.
 
 **Important note**: Correct capitalization of [BluetoothToggleLed] is important!
 
 ~~~bash
 [BluetoothToggleLed]
-enabled: True
-led_pin: 13
+led_pin: GPIO27
 ~~~
 
 #### GPIO control
