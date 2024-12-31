@@ -90,6 +90,17 @@ def bt_find_led_pin(led_pin):
     else:
         return proc.stdout.decode("utf-8").strip().split(" ")
 
+def bt_connect_all():
+    btDevices_console = subprocess.run("bluetoothctl devices", shell=True, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    logger.debug(btDevices_console.stdout)
+    for line in btDevices_console.stdout.decode("utf-8").strip().split("\n"):
+        r = re.search("^Device ([0-9A-F:]*) ", line)
+        if r is None:
+            continue
+        device = r.group(1)
+        c = subprocess.run(["bluetoothctl","connect",device], check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        logger.debug(c.stdout)
+
 def bt_switch(cmd, led_pins): # noqa C901
     """
     Set/Toggle between regular speakers and headphone output. If no bluetooth device is connected,
@@ -180,6 +191,8 @@ def bt_switch(cmd, led_pins): # noqa C901
             return
         else:
             print("No bluetooth device connected. Defaulting to \"Output 1\".")
+            bt_connect_all()
+
             sleeptime = 0.25
             for i in range(0, 3):
                 bt_leds(led_pins, [True, False])
