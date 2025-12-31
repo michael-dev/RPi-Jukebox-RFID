@@ -1,0 +1,16 @@
+{
+  "BTN_TOP2": "functionCallBluetoothToggle",
+  "BTN_TOP2_args": null,
+  "BTN_THUMB2": "functionCallPlayerNext",
+  "BTN_THUMB2_args": null,
+  "BTN_PINKIE": "functionCallPlayerPause",
+  "BTN_PINKIE_args": null,
+  "BTN_TOP": "functionCallPlayerPrev",
+  "BTN_TOP_args": null,
+  "BTN_THUMB": "functionCallBluetoothToggle",
+  "BTN_THUMB_args": "toggle2",
+  "BTN_BASE2": "functionCallVolD",
+  "BTN_BASE2_args": null,
+  "BTN_BASE": "functionCallVolU",
+  "BTN_BASE_args": null
+}
